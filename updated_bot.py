@@ -6276,3 +6276,57 @@ while True:
     except Exception as e:
         print(f"Polling error: {e}")
         time.sleep(5)
+
+from redeem_code import RedeemCodeSystem
+
+# Initialize the RedeemCodeSystem
+redeem_code_system = RedeemCodeSystem(db_execute, get_setting, set_setting, safe_send)
+
+# Admin command to add a redeem code
+@bot.message_handler(commands=['add_code'])
+def add_code_handler(message):
+    if is_admin(message.from_user.id):
+        try:
+            # Command format: /add_code <code> <value>
+            _, code, value = message.text.split()
+            value = int(value)
+
+            # Ensure value is valid
+            if value < 15:
+                bot.reply_to(message, "The minimum redeem value is ₹15.")
+                return
+
+            redeem_code_system.add_code(code, value)
+            bot.reply_to(message, f"Code {code} added with value ₹{value}.")
+        except Exception as e:
+            bot.reply_to(message, f"Error: {str(e)}")
+    else:
+        bot.reply_to(message, "You are not authorized to use this command.")
+
+# Admin command to remove a redeem code
+@bot.message_handler(commands=['remove_code'])
+def remove_code_handler(message):
+    if is_admin(message.from_user.id):
+        try:
+            # Command format: /remove_code <code>
+            _, code = message.text.split()
+            redeem_code_system.remove_code(code)
+            bot.reply_to(message, f"Code {code} has been removed.")
+        except Exception as e:
+            bot.reply_to(message, f"Error: {str(e)}")
+    else:
+        bot.reply_to(message, "You are not authorized to use this command.")
+
+# User command to redeem a code
+@bot.message_handler(commands=['redeem_code'])
+def redeem_code_handler(message):
+    try:
+        user_id = message.from_user.id
+        # Command format: /redeem_code <code>
+        _, code = message.text.split()
+        user_balance = get_user_balance(user_id)  # Assume a function to get user balance
+
+        response = redeem_code_system.redeem_code(user_id, code, user_balance)
+        bot.reply_to(message, response)
+    except Exception as e:
+        bot.reply_to(message, f"Error: {str(e)}")
