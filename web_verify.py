@@ -3,6 +3,9 @@ import time
 import sqlite3
 import hashlib
 import re
+import json
+import urllib.request
+import urllib.parse
 from flask import Flask, request, jsonify, render_template
 
 app = Flask(__name__, template_folder="templates")
@@ -10,6 +13,7 @@ app = Flask(__name__, template_folder="templates")
 DB_PATH = os.environ.get("DB_PATH", "/data/bot_database.db")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "realupilootbot")
 SECRET_SALT = os.environ.get("SECRET_SALT", "change_me_in_production")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 MAX_ATTEMPTS = 5
 RATE_WINDOW = 3600
@@ -138,6 +142,86 @@ def log_verification(cur, user_id, ip, result, reason, user_agent, session_hash=
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (user_id, ip, result, reason, user_agent, time.time(), session_hash))
 
+
+
+def build_main_keyboard(user_id: int):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🚀 Open Bot", "url": f"https://t.me/{BOT_USERNAME}?start={user_id}"}
+            ]
+        ]
+    }
+
+
+def send_telegram_auto_welcome(user_id: int):
+    if not BOT_TOKEN:
+        return False, "BOT_TOKEN missing"
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT first_name, balance FROM users WHERE user_id = ?", (user_id,))
+    user = cur.fetchone()
+    cur.execute("SELECT value FROM settings WHERE key = 'per_refer'")
+    per_refer_row = cur.fetchone()
+    cur.execute("SELECT value FROM settings WHERE key = 'min_withdraw'")
+    min_withdraw_row = cur.fetchone()
+    cur.execute("SELECT value FROM settings WHERE key = 'welcome_image'")
+    welcome_image_row = cur.fetchone()
+    conn.close()
+
+    first_name = (user["first_name"] if user else "User") or "User"
+    balance = float(user["balance"] or 0) if user else 0
+    per_refer = per_refer_row["value"] if per_refer_row else "2"
+    min_withdraw = min_withdraw_row["value"] if min_withdraw_row else "5"
+    welcome_image = welcome_image_row["value"] if welcome_image_row and welcome_image_row["value"] else ""
+    refer_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
+
+    caption = (
+        "🎉 <b>Verification Successful!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👋 Hello, <b>{first_name}</b>!\n\n"
+        f"💰 <b>Your Balance:</b> ₹{balance:.2f}\n"
+        f"⭐ <b>Per Refer:</b> ₹{per_refer}\n"
+        f"🏧 <b>Min Withdraw:</b> ₹{min_withdraw}\n\n"
+        "🚀 <b>Your account is now active.</b>\n"
+        "Share your link and start earning now.\n\n"
+        f"🔗 <b>Your Refer Link:</b>\n<code>{refer_link}</code>"
+    )
+
+    keyboard = build_main_keyboard(user_id)
+
+    try:
+        if welcome_image:
+            payload = urllib.parse.urlencode({
+                "chat_id": str(user_id),
+                "photo": welcome_image,
+                "caption": caption,
+                "parse_mode": "HTML",
+                "reply_markup": json.dumps(keyboard),
+            }).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        else:
+            payload = urllib.parse.urlencode({
+                "chat_id": str(user_id),
+                "text": caption,
+                "parse_mode": "HTML",
+                "reply_markup": json.dumps(keyboard),
+            }).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return True, resp.read().decode()
+    except Exception as e:
+        return False, str(e)
 
 def verify_user(user_id: int, ip: str, user_agent: str):
     conn = get_db()
@@ -298,6 +382,9 @@ def ip_verify():
     user_agent = request.headers.get("User-Agent", "")
 
     ok, data = verify_user(user_id, ip, user_agent)
+
+    if ok and data.get("status") == "verified":
+        send_telegram_auto_welcome(user_id)
 
     if not ok:
         return render_template(

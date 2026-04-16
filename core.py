@@ -46,8 +46,9 @@ DEFAULT_SETTINGS = {
     "min_gift_amount": 3,
     "tasks_enabled": True,
     "redeem_withdraw_enabled": True,
-    "redeem_min_withdraw": 15,
-    "redeem_gst_cut": 5,
+    "redeem_min_withdraw": 10,
+    "redeem_multiple_of": 5,
+    "redeem_gst_cut": 3,
 }
 
 PE = {
@@ -303,6 +304,11 @@ def init_db():
             (key, json.dumps(value))
         )
 
+    # Force redeem-code withdrawal rules from code so old DB values do not keep overriding them
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("redeem_min_withdraw", json.dumps(DEFAULT_SETTINGS["redeem_min_withdraw"])))
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("redeem_multiple_of", json.dumps(DEFAULT_SETTINGS["redeem_multiple_of"])))
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("redeem_gst_cut", json.dumps(DEFAULT_SETTINGS["redeem_gst_cut"])))
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute(
         "INSERT OR IGNORE INTO admins (user_id, username, first_name, added_by, added_at, permissions, is_active) "
@@ -395,17 +401,24 @@ def get_total_referrals():
 
 def get_redeem_min_withdraw():
     try:
-        value = float(get_setting("redeem_min_withdraw") or 15)
+        value = float(get_setting("redeem_min_withdraw") or DEFAULT_SETTINGS["redeem_min_withdraw"])
     except Exception:
-        value = 15
-    return max(15, value)
+        value = float(DEFAULT_SETTINGS["redeem_min_withdraw"])
+    return max(1, value)
+
+def get_redeem_multiple_of():
+    try:
+        value = int(get_setting("redeem_multiple_of") or DEFAULT_SETTINGS["redeem_multiple_of"])
+    except Exception:
+        value = int(DEFAULT_SETTINGS["redeem_multiple_of"])
+    return max(1, value)
 
 def get_redeem_gst_cut():
     try:
-        value = float(get_setting("redeem_gst_cut") or 5)
+        value = float(get_setting("redeem_gst_cut") or DEFAULT_SETTINGS["redeem_gst_cut"])
     except Exception:
-        value = 5
-    return max(5, value)
+        value = float(DEFAULT_SETTINGS["redeem_gst_cut"])
+    return max(0, value)
 
 def get_active_redeem_codes(limit=None):
     query = (
@@ -560,7 +573,7 @@ def show_redeem_withdraw(chat_id, user_id):
         f"{pe('money')} <b>Your Balance:</b> ₹{user['balance']:.2f}\n"
         f"{pe('down_arrow')} <b>Minimum Code Value:</b> ₹{redeem_min:.0f}\n"
         f"{pe('info')} <b>GST / Fee:</b> ₹{gst_cut:.0f} extra per redemption\n"
-        f"{pe('arrow')} <b>Allowed amounts:</b> multiples of ₹5 only\n\n"
+        f"{pe('arrow')} <b>Allowed amounts:</b> multiples of ₹{get_redeem_multiple_of():.0f} only\n\n"
         f"{pe('list')} <b>Available Codes:</b>\n" + "\n".join(available_lines) + "\n\n"
         f"{pe('warning')} You will be charged <b>Code Amount + ₹{gst_cut:.0f}</b> from your balance.",
         reply_markup=markup
@@ -635,29 +648,12 @@ def process_referral_bonus(user_id):
         (user_id,)
     )
 
-    game_reward = int(get_setting("game_referral_reward") or 0)
-    if game_reward > 0:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        db_execute(
-            "INSERT OR IGNORE INTO game_wallet (user_id, balance, earned_total, spent_total, updated_at) VALUES (?,?,?,?,?)",
-            (referred_by, 0, 0, 0, now)
-        )
-        db_execute(
-            "UPDATE game_wallet SET balance=balance+?, earned_total=earned_total+?, updated_at=? WHERE user_id=?",
-            (game_reward, game_reward, now, referred_by)
-        )
-        db_execute(
-            "INSERT INTO game_transactions (user_id, amount, tx_type, reason, created_at) VALUES (?,?,?,?,?)",
-            (referred_by, game_reward, 'credit', 'referral_bonus', now)
-        )
-
     try:
-        extra_game = f"\n{pe('game')} You also earned <b>{game_reward}</b> game coins." if game_reward > 0 else ""
         safe_send(
             referred_by,
             f"{pe('party')} <b>Referral Bonus Claimed!</b>\n\n"
             f"{pe('check')} Your referred user completed channel join and IP verification.\n"
-            f"{pe('money')} You earned <b>₹{per_refer}</b>{extra_game}\n\n"
+            f"{pe('money')} You earned <b>₹{per_refer}</b>\n\n"
             f"{pe('fire')} Keep sharing to earn more!"
         )
     except:
@@ -836,7 +832,6 @@ def get_main_keyboard(user_id=None):
     )
     markup.add(
         types.KeyboardButton("📋 Tasks"),
-        types.KeyboardButton("🎮 Games"),
     )
     if user_id and is_admin(user_id):
         markup.add(types.KeyboardButton("👑 Admin Panel"))
